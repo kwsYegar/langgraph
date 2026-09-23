@@ -1036,6 +1036,46 @@ async def test_embed_with_path(fake_embeddings: CharacterEmbeddings) -> None:
     assert doc5_result.score is None
 
 
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("paths", [["$"], ["$", "text"]])
+@pytest.mark.parametrize("extra_fields", [{}, {"$": "literal field"}])
+async def test_embed_with_root_path_override(
+    use_async: bool, paths: list[str], extra_fields: dict[str, str]
+) -> None:
+    embedded_texts: list[str] = []
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        embedded_texts.extend(texts)
+        return [[1.0, 0.0] if "memory" in text else [0.0, 1.0] for text in texts]
+
+    store = InMemoryStore(index={"dims": 2, "embed": embed, "fields": ["text"]})
+    store.put(("docs",), "other", {"text": "unrelated"})
+    embedded_texts.clear()
+    value = {
+        "text": "你好",
+        "metadata": {"topic": "memory"},
+        **extra_fields,
+    }
+    if use_async:
+        await store.aput(("docs",), "doc", value, index=paths)
+    else:
+        store.put(("docs",), "doc", value, index=paths)
+
+    expected_texts = [json.dumps(value, sort_keys=True, ensure_ascii=False)]
+    if "text" in paths:
+        expected_texts.append(value["text"])
+    assert embedded_texts == expected_texts
+
+    if use_async:
+        results = await store.asearch(("docs",), query="memory", limit=1)
+    else:
+        results = store.search(("docs",), query="memory", limit=1)
+    assert len(results) == 1
+    assert results[0].key == "doc"
+    assert results[0].value == value
+    assert results[0].score == pytest.approx(1.0)
+
+
 def test_non_ascii(fake_embeddings: CharacterEmbeddings) -> None:
     """Test support for non-ascii characters"""
     store = InMemoryStore(
